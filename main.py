@@ -21,8 +21,9 @@ except Exception:
         pass
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
-FPS = 15
-AUDIO_KBPS = 64
+FPS = 15          # gravação
+OUT_FPS = 10      # vídeo final (tela é estática, 10 fps basta)
+AUDIO_KBPS = 48
 NO_MIC = "(sem microfone)"
 
 
@@ -129,7 +130,6 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Gravador Compacto")
-        self.root.geometry("420x330")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
 
@@ -166,7 +166,7 @@ class App:
         ttk.Spinbox(row2, from_=1, to=500, width=5, textvariable=self.limit, command=self.update_hint).pack(side="left", padx=6)
         ttk.Button(row2, text="Pasta de saída", command=self.pick_dir).pack(side="left", padx=6)
 
-        self.hint = ttk.Label(self.root, text="", foreground="gray")
+        self.hint = ttk.Label(self.root, text="", foreground="gray", wraplength=470, justify="left")
         self.hint.pack(anchor="w", **pad)
 
         self.timer = ttk.Label(self.root, text="00:00", font=("Segoe UI", 22, "bold"))
@@ -211,10 +211,10 @@ class App:
 
     def update_hint(self):
         try:
-            limit_bits = self.limit.get() * 1024 * 1024 * 8 * 0.92
+            limit_bits = self.limit.get() * 1024 * 1024 * 8 * 0.98
         except tk.TclError:
             return
-        secs = limit_bits / ((300 + AUDIO_KBPS) * 1000)
+        secs = limit_bits / ((280 + AUDIO_KBPS) * 1000)
         self.hint.config(text=f"Boa qualidade com até ~{secs/60:.1f} min. Acima disso, o app reduz a qualidade para caber.")
 
     def set_status(self, text):
@@ -274,8 +274,8 @@ class App:
         mic = self.mic.get()
         has_audio = mic and mic != NO_MIC
         if has_audio:
-             cmd += ["-f", "dshow", "-i", f"audio={mic}"]
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
+            cmd += ["-f", "dshow", "-i", f"audio={mic}"]
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
         if has_audio:
             cmd += ["-c:a", "aac", "-b:a", "128k", "-ac", "1", "-af", "aresample=async=1:first_pts=0"]
         cmd.append(seg)
@@ -357,30 +357,40 @@ class App:
             mic = self.mic.get()
             has_audio = bool(mic) and mic != NO_MIC
             limit_bytes = self.limit.get() * 1024 * 1024
-            target_bytes = limit_bytes * 0.92
+            target_bytes = limit_bytes * 0.98
+            audio_k = AUDIO_KBPS if has_audio else 0
             total_kbps = target_bytes * 8 / duration / 1000
-            vk = max(total_kbps - (AUDIO_KBPS if has_audio else 0), 30)
+            vk = max(total_kbps - audio_k * 1.03, 30)
 
             out = os.path.join(self.out_dir, f"gravacao_{datetime.now():%Y%m%d_%H%M%S}.mp4")
-            for attempt in range(4):
-                width = 1280 if vk >= 500 else 960 if vk >= 250 else 720 if vk >= 120 else 480
-                self.set_status(f"Comprimindo (tentativa {attempt + 1})... {vk:.0f} kbps")
-                cmd = [ffmpeg_exe(), "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
-                       "-vf", f"scale='min({width},iw)':-2,fps={FPS}",
-                       "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
-                       "-b:v", f"{int(vk)}k", "-maxrate", f"{int(vk * 1.15)}k", "-bufsize", f"{int(vk * 2)}k"]
-                if has_audio:
-                    cmd += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
-                else:
-                    cmd += ["-an"]
-                cmd += ["-movflags", "+faststart", out]
+            plog = os.path.join(self.tmp, "pass")
+            null = "NUL" if os.name == "nt" else "/dev/null"
+
+            def run(cmd):
                 r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
-                if r.returncode != 0 or not os.path.exists(out):
+                if r.returncode != 0:
                     raise RuntimeError("Falha ao comprimir:\n" + r.stderr[-600:])
+
+            for attempt in range(3):
+                width = 1280 if vk >= 450 else 1024 if vk >= 200 else 854 if vk >= 100 else 640
+                base = [ffmpeg_exe(), "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
+                        "-vf", f"scale='min({width},iw)':-2,fps={OUT_FPS}",
+                        "-c:v", "libx264", "-preset", "slow", "-pix_fmt", "yuv420p",
+                        "-b:v", f"{int(vk)}k", "-g", str(OUT_FPS * 20), "-passlogfile", plog]
+                self.set_status(f"Comprimindo: passo 1 de 2 (tentativa {attempt + 1})...")
+                run(base + ["-pass", "1", "-an", "-f", "null", null])
+                self.set_status(f"Comprimindo: passo 2 de 2 (tentativa {attempt + 1})...")
+                cmd2 = base + ["-pass", "2"]
+                if has_audio:
+                    cmd2 += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
+                else:
+                    cmd2 += ["-an"]
+                cmd2 += ["-movflags", "+faststart", out]
+                run(cmd2)
                 size = os.path.getsize(out)
                 if size <= limit_bytes:
                     break
-                vk *= (limit_bytes / size) * 0.93
+                vk *= target_bytes / size
 
             size = os.path.getsize(out)
             mb = size / 1024 / 1024
