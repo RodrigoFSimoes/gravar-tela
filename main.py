@@ -274,7 +274,7 @@ class App:
         mic = self.mic.get()
         has_audio = mic and mic != NO_MIC
         if has_audio:
-            cmd += ["-f", "dshow", "-thread_queue_size", "1024", "-i", f"audio={mic}"]
+             cmd += ["-f", "dshow", "-i", f"audio={mic}"]
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
         if has_audio:
             cmd += ["-c:a", "aac", "-b:a", "128k", "-ac", "1", "-af", "aresample=async=1:first_pts=0"]
