@@ -211,7 +211,7 @@ class App:
 
     def update_hint(self):
         try:
-            limit_bits = self.limit.get() * 1024 * 1024 * 8 * 0.98
+            limit_bits = self.limit.get() * 1000 * 1000 * 8 * 0.975
         except tk.TclError:
             return
         secs = limit_bits / ((280 + AUDIO_KBPS) * 1000)
@@ -356,7 +356,7 @@ class App:
 
             mic = self.mic.get()
             has_audio = bool(mic) and mic != NO_MIC
-            limit_bytes = self.limit.get() * 1024 * 1024
+            limit_bytes = self.limit.get() * 1000 * 1000  # MB decimal, como o sistema da empresa conta
             target_bytes = limit_bytes * 0.975
             audio_k = AUDIO_KBPS if has_audio else 0
             total_kbps = target_bytes * 8 / duration / 1000
@@ -433,7 +433,7 @@ class App:
                 vk *= target_bytes / size
 
             size = os.path.getsize(out)
-            mb = size / 1024 / 1024
+            mb = size / 1_000_000
             ok = size <= limit_bytes
             self.root.after(0, lambda: self.done(out, mb, ok))
         except Exception as e:
