@@ -357,7 +357,7 @@ class App:
             mic = self.mic.get()
             has_audio = bool(mic) and mic != NO_MIC
             limit_bytes = self.limit.get() * 1024 * 1024
-            target_bytes = limit_bytes * 0.98
+            target_bytes = limit_bytes * 0.975
             audio_k = AUDIO_KBPS if has_audio else 0
             total_kbps = target_bytes * 8 / duration / 1000
             vk = max(total_kbps - audio_k * 1.03, 30)
@@ -366,27 +366,39 @@ class App:
             plog = os.path.join(self.tmp, "pass")
             null = "NUL" if os.name == "nt" else "/dev/null"
 
-            def run(cmd):
-                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
-                if r.returncode != 0:
-                    raise RuntimeError("Falha ao comprimir:\n" + r.stderr[-600:])
+            def run(cmd, label):
+                errlog = os.path.join(self.tmp, "enc_err.txt")
+                with open(errlog, "w", encoding="utf-8", errors="replace") as ef:
+                    p = subprocess.Popen(cmd + ["-progress", "pipe:1", "-nostats"], stdout=subprocess.PIPE,
+                                         stderr=ef, text=True, encoding="utf-8", errors="replace",
+                                         creationflags=NO_WINDOW)
+                    for line in p.stdout:
+                        if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                            try:
+                                t = int(line.split("=")[1]) / 1_000_000
+                                self.set_status(f"{label} {min(int(t / duration * 100), 100)}%")
+                            except ValueError:
+                                pass
+                    p.wait()
+                if p.returncode != 0:
+                    with open(errlog, encoding="utf-8", errors="replace") as ef:
+                        raise RuntimeError("Falha ao comprimir:\n" + ef.read()[-600:])
 
             for attempt in range(3):
                 width = 1280 if vk >= 450 else 1024 if vk >= 200 else 854 if vk >= 100 else 640
                 base = [ffmpeg_exe(), "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
                         "-vf", f"scale='min({width},iw)':-2,fps={OUT_FPS}",
-                        "-c:v", "libx264", "-preset", "slow", "-pix_fmt", "yuv420p",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "0",
                         "-b:v", f"{int(vk)}k", "-g", str(OUT_FPS * 20), "-passlogfile", plog]
-                self.set_status(f"Comprimindo: passo 1 de 2 (tentativa {attempt + 1})...")
-                run(base + ["-pass", "1", "-an", "-f", "null", null])
-                self.set_status(f"Comprimindo: passo 2 de 2 (tentativa {attempt + 1})...")
-                cmd2 = base + ["-pass", "2"]
+                run(base + ["-preset", "veryfast", "-pass", "1", "-an", "-f", "null", null],
+                    f"Comprimindo, passo 1 de 2 (tentativa {attempt + 1}):")
+                cmd2 = base + ["-preset", "medium", "-pass", "2"]
                 if has_audio:
                     cmd2 += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
                 else:
                     cmd2 += ["-an"]
                 cmd2 += ["-movflags", "+faststart", out]
-                run(cmd2)
+                run(cmd2, f"Comprimindo, passo 2 de 2 (tentativa {attempt + 1}):")
                 size = os.path.getsize(out)
                 if size <= limit_bytes:
                     break
