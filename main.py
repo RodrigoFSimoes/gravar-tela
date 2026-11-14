@@ -42,7 +42,7 @@ def ffmpeg_exe():
 def run_ffmpeg_text(args):
     return subprocess.run(
         [ffmpeg_exe(), "-hide_banner"] + args,
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
         creationflags=NO_WINDOW,
     )
 
@@ -369,7 +369,7 @@ class App:
             def run(cmd, label):
                 errlog = os.path.join(self.tmp, "enc_err.txt")
                 with open(errlog, "w", encoding="utf-8", errors="replace") as ef:
-                    p = subprocess.Popen(cmd + ["-progress", "pipe:1", "-nostats"], stdout=subprocess.PIPE,
+                    p = subprocess.Popen(cmd[:3] + ["-progress", "pipe:1", "-nostats"] + cmd[3:], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                          stderr=ef, text=True, encoding="utf-8", errors="replace",
                                          creationflags=NO_WINDOW)
                     for line in p.stdout:
@@ -409,7 +409,9 @@ class App:
             ok = size <= limit_bytes
             self.root.after(0, lambda: self.done(out, mb, ok))
         except Exception as e:
-            self.root.after(0, lambda: self.fail(str(e)))
+            import traceback
+            err = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()[-700:]}"
+            self.root.after(0, self.fail, err)
 
     def done(self, out, mb, ok):
         shutil.rmtree(self.tmp, ignore_errors=True)
