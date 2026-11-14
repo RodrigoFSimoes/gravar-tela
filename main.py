@@ -390,9 +390,9 @@ class App:
                         "-vf", f"scale='min({width},iw)':-2,fps={OUT_FPS}",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "0",
                         "-b:v", f"{int(vk)}k", "-g", str(OUT_FPS * 20), "-passlogfile", plog]
-                run(base + ["-preset", "veryfast", "-pass", "1", "-an", "-f", "null", null],
+                run(base + ["-preset", "veryfast", "-pass:v", "1", "-an", "-f", "null", null],
                     f"Comprimindo, passo 1 de 2 (tentativa {attempt + 1}):")
-                cmd2 = base + ["-preset", "medium", "-pass", "2"]
+                cmd2 = base + ["-preset", "medium", "-pass:v", "2"]
                 if has_audio:
                     cmd2 += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
                 else:
