@@ -382,23 +382,51 @@ class App:
                     p.wait()
                 if p.returncode != 0:
                     with open(errlog, encoding="utf-8", errors="replace") as ef:
-                        raise RuntimeError("Falha ao comprimir:\n" + ef.read()[-600:])
+                        raise RuntimeError("Falha ao comprimir:\n" + ef.read()[-1500:])
 
+            ff = ffmpeg_exe()
+            vid = os.path.join(self.tmp, "video.mp4")
+            aud = os.path.join(self.tmp, "audio.m4a")
+            concat_in = ["-f", "concat", "-safe", "0", "-i", listfile]
+
+            # Áudio é codificado uma vez só, separado do vídeo
+            if has_audio:
+                run([ff, "-hide_banner", "-y"] + concat_in +
+                    ["-vn", "-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100", aud],
+                    "Processando áudio:")
+
+            use_fallback = False
             for attempt in range(3):
                 width = 1280 if vk >= 450 else 1024 if vk >= 200 else 854 if vk >= 100 else 640
-                base = [ffmpeg_exe(), "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
-                        "-vf", f"scale='min({width},iw)':-2,fps={OUT_FPS}",
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "0",
-                        "-b:v", f"{int(vk)}k", "-g", str(OUT_FPS * 20), "-passlogfile", plog]
-                run(base + ["-preset", "veryfast", "-pass:v", "1", "-an", "-f", "null", null],
-                    f"Comprimindo, passo 1 de 2 (tentativa {attempt + 1}):")
-                cmd2 = base + ["-preset", "medium", "-pass:v", "2"]
-                if has_audio:
-                    cmd2 += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
-                else:
-                    cmd2 += ["-an"]
-                cmd2 += ["-movflags", "+faststart", out]
-                run(cmd2, f"Comprimindo, passo 2 de 2 (tentativa {attempt + 1}):")
+                vf = f"scale='min({width},iw)':-2,fps={OUT_FPS}"
+                vopts = ["-vf", vf, "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                         "-threads", "0", "-b:v", f"{int(vk)}k", "-g", str(OUT_FPS * 20)]
+                done_ok = False
+                if not use_fallback:
+                    try:
+                        run([ff, "-hide_banner", "-y"] + concat_in + vopts +
+                            ["-passlogfile", plog, "-pass", "1", "-an", "-f", "null", null],
+                            f"Comprimindo, passo 1 de 2 (tentativa {attempt + 1}):")
+                        run([ff, "-hide_banner", "-y"] + concat_in + vopts +
+                            ["-passlogfile", plog, "-pass", "2", "-an", vid],
+                            f"Comprimindo, passo 2 de 2 (tentativa {attempt + 1}):")
+                        mux = [ff, "-hide_banner", "-y", "-i", vid]
+                        if has_audio:
+                            mux += ["-i", aud]
+                        mux += ["-c", "copy", "-movflags", "+faststart", out]
+                        run(mux, "Finalizando:")
+                        done_ok = True
+                    except RuntimeError:
+                        use_fallback = True  # 2 passos falhou: usa método simples
+                if not done_ok:
+                    cmd = [ff, "-hide_banner", "-y"] + concat_in + vopts + \
+                          ["-maxrate", f"{int(vk * 1.15)}k", "-bufsize", f"{int(vk * 2)}k"]
+                    if has_audio:
+                        cmd += ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "1", "-ar", "44100"]
+                    else:
+                        cmd += ["-an"]
+                    cmd += ["-movflags", "+faststart", out]
+                    run(cmd, f"Comprimindo (modo simples, tentativa {attempt + 1}):")
                 size = os.path.getsize(out)
                 if size <= limit_bytes:
                     break
